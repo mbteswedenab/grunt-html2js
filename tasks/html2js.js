@@ -10,6 +10,8 @@
 
 'use strict';
 
+var crypto = require('crypto');
+
 module.exports = function (grunt) {
 
     var path = require('path');
@@ -28,16 +30,6 @@ module.exports = function (grunt) {
             p = p.replace(/\\/g, '/');
         }
         return p;
-    };
-
-    // Warn on and remove invalid source files (if nonull was set).
-    var existsFilter = function (filepath) {
-        if (!grunt.file.exists(filepath)) {
-            grunt.log.warn('Source file "' + filepath + '" not found.');
-            return false;
-        } else {
-            return true;
-        }
     };
 
     function isJadeTemplate(filepath) {
@@ -166,13 +158,45 @@ module.exports = function (grunt) {
 
         // generate a separate module
         function generateModule(f) {
-
             // f.dest must be a string or write will fail
             var moduleNames = [];
-            var filePaths = f.src.filter(existsFilter);
+            var filePaths = f.src.filter(function(filepath) {
+                if (options.ignore && filepath.indexOf(options.ignore) >= 0) {
+                    grunt.log.writeln(`Ignored  ${filepath}`);
+                    return false;
+                }
+                if (!grunt.file.exists(filepath)) {
+                    grunt.log.warn('Source file "' + filepath + '" not found.');
+                    return false;
+                } else {
+                    return true;
+                }
+            });
 
             if (options.watch) {
                 watcher.add(filePaths);
+            }
+
+            // calculate md5 hash for source
+            var totalCode = '';
+            filePaths.forEach(function(file) {
+              var code = grunt.file.read(file);
+              totalCode += code;
+            });
+            var hash = crypto.createHash('md5');
+            hash.update(totalCode);
+            var hex = hash.digest('hex');
+            counter += filePaths.length;
+
+            // checking cache ...
+            var cachedFile = `${options.hashCacheFolder}/${f.dest.replace(/\//g, '-')}`;
+            if (options.hashCacheFolder && grunt.file.exists(cachedFile)) {
+                var cachedFileData = JSON.parse(grunt.file.read(cachedFile));
+                if (cachedFileData.hex === hex) {
+                    grunt.log.ok('File ' + f.dest + ' was loaded from cache.');
+                    grunt.file.write(f.dest, cachedFileData.content);
+                    return;
+                }
             }
 
             var modules = filePaths.map(function (filepath) {
@@ -254,7 +278,10 @@ module.exports = function (grunt) {
 
                 bundle += "\n\n";
             }
-            grunt.file.write(f.dest, grunt.util.normalizelf(fileHeader + amdPrefix + bundle + modules + amdSuffix + fileFooter));
+
+            var content = grunt.util.normalizelf(fileHeader + amdPrefix + bundle + modules + amdSuffix + fileFooter);
+            grunt.file.write(cachedFile, JSON.stringify({ hex: hex, content: content }));
+            grunt.file.write(f.dest, content);
         }
 
         this.files.forEach(generateModule);
